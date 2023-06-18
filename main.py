@@ -137,6 +137,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
                 http=kubernetes.client.V1HTTPIngressRuleValue(
                     paths=[kubernetes.client.V1HTTPIngressPath(
                         path="/",
+                        path_type="Prefix",
                         backend=kubernetes.client.V1IngressServiceBackend(
                             port=80,
                             name=deployment_name
