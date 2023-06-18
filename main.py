@@ -107,7 +107,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
         spec=spec,
     )
 
-    k8s_apps_api_client.create_namespaced_deployment(namespace, deployment)
+    k8s_apps_api_client.create_namespaced_deployment(namespace_name, deployment)
 
     print("created deployment")
 
@@ -122,7 +122,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
                 port=80, target_port=80)]
         )
     )
-    k8s_core_api_client.create_namespaced_service(namespace, service)
+    k8s_core_api_client.create_namespaced_service(namespace_name, service)
 
     print("created service")
 
@@ -146,7 +146,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
             )]
         )
     )
-    k8s_networking_api_client.create_namespaced_ingress(namespace, ingress)
+    k8s_networking_api_client.create_namespaced_ingress(namespace_name, ingress)
 
     print("created ingress")
 
