@@ -54,6 +54,13 @@ async def build_image(repo_path, image_name):
     return image.tags[0]
 
 
+async def push_image(image_tag):
+    prefix = "localhost:32000"
+    new_image_tag = f"{prefix}/{image_tag}"
+    docker_client.images.get(image_tag).tag(new_image_tag)
+    docker_client.images.push(new_image_tag)
+
+
 async def deploy(repo_url):
     repo_name = repo_url.split("/")[-1].split(".")[0]
     user_id = uuid.uuid4()
@@ -65,6 +72,7 @@ async def deploy(repo_url):
     image_tag = await build_image(repo_path, image_name)
     print(image_tag)
 
+    await push_image(image_tag)
 
     # push docker image to cluster?
     # create k8s deployment + service + ingress config giles
