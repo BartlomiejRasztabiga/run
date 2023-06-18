@@ -46,29 +46,32 @@ async def check_dockerfile(repo_path):
         raise Exception("Dockerfile not found")
 
 
-async def build_image(repo_path, repo_name):
+async def build_image(repo_path, image_name):
     image, build_logs = docker_client.images.build(
-        path=repo_path, tag=repo_name, rm=True, pull=True
+        path=repo_path, tag=image_name, rm=True, pull=True
     )
-    print(image)
-    print(build_logs)
+
+    return image.tags[0]
 
 
 async def deploy(repo_url):
     repo_name = repo_url.split("/")[-1].split(".")[0]
     user_id = uuid.uuid4()
-    repo_path = f"{BASE_PATH}/{repo_name}-{user_id}"
+    image_name = f"{repo_name}-{user_id}"
+    repo_path = f"{BASE_PATH}/{image_name}"
 
     await clone_repo(repo_url, repo_path)
     await check_dockerfile(repo_path)
-    await build_image(repo_path, repo_name)
-    # build docker image
+    image_tag = await build_image(repo_path, image_name)
+    print(image_tag)
+
+
     # push docker image to cluster?
     # create k8s deployment + service + ingress config giles
     # apply k8s config files
     # return url
 
-    pass
+    return image_tag
 
 
 @app.get("/")
@@ -83,4 +86,5 @@ async def say_hello(name: str):
 
 @app.post("/deployments")
 async def create_deployment(request: CreateDeploymentRequest):
-    await deploy(request.repo_url)
+    image_tag = await deploy(request.repo_url)
+    return {"image_tag": image_tag}
