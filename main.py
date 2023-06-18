@@ -69,8 +69,15 @@ async def push_image(image_tag):
     return new_image_tag
 
 
-async def create_k8s_deployment(namespace, image_tag, deployment_name):
+async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
+    namespace = kubernetes.client.V1Namespace(
+        api_version="v1",
+        kind="Namespace",
+        metadata=kubernetes.client.V1ObjectMeta(name=namespace_name),
+    )
     k8s_core_api_client.create_namespace(namespace)
+
+    print("created namespace")
 
     # TODO jaki port???
 
@@ -102,6 +109,8 @@ async def create_k8s_deployment(namespace, image_tag, deployment_name):
 
     k8s_apps_api_client.create_namespaced_deployment(namespace, deployment)
 
+    print("created deployment")
+
     # create service
     service = kubernetes.client.V1Service(
         api_version="v1",
@@ -114,6 +123,8 @@ async def create_k8s_deployment(namespace, image_tag, deployment_name):
         )
     )
     k8s_core_api_client.create_namespaced_service(namespace, service)
+
+    print("created service")
 
     # create ingress
     ingress = kubernetes.client.V1Ingress(
@@ -136,6 +147,8 @@ async def create_k8s_deployment(namespace, image_tag, deployment_name):
         )
     )
     k8s_networking_api_client.create_namespaced_ingress(namespace, ingress)
+
+    print("created ingress")
 
     # get url
     return f"https://{deployment_name}.rasztabiga.me"
