@@ -138,17 +138,21 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
                     paths=[kubernetes.client.V1HTTPIngressPath(
                         path="/",
                         path_type="Prefix",
-                        backend=kubernetes.client.V1IngressServiceBackend(
-                            port=kubernetes.client.V1ServiceBackendPort(
-                                number=80
-                            ),
-                            name=deployment_name
+                        backend=kubernetes.client.V1IngressBackend(
+                            service=kubernetes.client.V1IngressServiceBackend(
+                                port=kubernetes.client.V1ServiceBackendPort(
+                                    number=80
+                                ),
+                                name=deployment_name
+                            )
                         )
                     )]
                 )
             )]
         )
     )
+    print(ingress)
+
     k8s_networking_api_client.create_namespaced_ingress(namespace_name, ingress)
 
     print("created ingress")
