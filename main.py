@@ -84,7 +84,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
     container = kubernetes.client.V1Container(
         name="container",
         image=image_tag,
-        ports=[kubernetes.client.V1ContainerPort(container_port=80)]
+        ports=[kubernetes.client.V1ContainerPort(container_port=8080)]
     )
 
     # Create and configure a spec section
@@ -119,7 +119,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
         spec=kubernetes.client.V1ServiceSpec(
             selector={"app": "container"},
             ports=[kubernetes.client.V1ServicePort(
-                port=80, target_port=80)]
+                port=8080, target_port=8080)]
         )
     )
     k8s_core_api_client.create_namespaced_service(namespace_name, service)
@@ -141,7 +141,7 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
                         backend=kubernetes.client.V1IngressBackend(
                             service=kubernetes.client.V1IngressServiceBackend(
                                 port=kubernetes.client.V1ServiceBackendPort(
-                                    number=80
+                                    number=8080
                                 ),
                                 name=deployment_name
                             )
@@ -151,8 +151,6 @@ async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
             )]
         )
     )
-    print(ingress)
-
     k8s_networking_api_client.create_namespaced_ingress(namespace_name, ingress)
 
     print("created ingress")
