@@ -5,14 +5,26 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from git import Repo
 
+def tree(some_dir, level):
+    some_dir = some_dir.rstrip(os.path.sep)
+    assert os.path.isdir(some_dir)
+    num_sep = some_dir.count(os.path.sep)
+    for root, dirs, files in os.walk(some_dir):
+        yield root, dirs, files
+        num_sep_this = root.count(os.path.sep)
+        if num_sep + level <= num_sep_this:
+            del dirs[:]
+
 load_dotenv()
 
 client = OpenAI()
 
-model = "gpt-4o-mini"
+# model = "gpt-4o-mini"
+model = "gpt-4o"
 temperature = 0.2
 
-repo_url = "https://github.com/BartlomiejRasztabiga/run-example.git"
+# repo_url = "https://github.com/BartlomiejRasztabiga/run-example.git"
+repo_url = "git@bitbucket.org:symmetricalai/employee-management.git"
 repo_name = repo_url.split("/")[-1].replace(".git", "")
 
 tmp_dir = f"./tmp/{repo_name}"
@@ -33,7 +45,7 @@ repo = Repo.clone_from(repo_url, tmp_dir)
 print("Preparing tree...")
 
 # get tree ignoring .git
-tree = os.walk(tmp_dir)
+tree = tree(tmp_dir, level=1)
 
 # tree to string, ignoring .git
 tree_str = ""
@@ -52,7 +64,7 @@ completion = client.chat.completions.create(
     messages=[
         {
             "role": "system",
-            "content": "You are a helpful assistant, that given repository files structure will help to identify the most important files to generate a Dockerfile to build a valid docker image that can be run to run the app of repository. Respond only with the file names, in the same format as provided.",
+            "content": "You are a helpful assistant, that given repository files structure (only some part of it) will help to identify the most important files to generate a Dockerfile to build a valid docker image that can be run to run the app of repository. Respond only with the file names, in the same format as provided, ignore formatting markers.",
         },
         {"role": "user", "content": tree_str},
     ],
@@ -65,6 +77,10 @@ print("Preparing files content...")
 
 # get files from response and trim (strip)
 files = list(map(lambda x: x.strip(), content.split("\n")))
+
+# ignore .jar and Dockerfile files (unsupported)
+ignored_files = [".jar", "Dockerfile"]
+files = [file for file in files if not any(ignored_file in file for ignored_file in ignored_files)]
 
 # get files content
 files_content = {}
@@ -85,7 +101,7 @@ completion = client.chat.completions.create(
     messages=[
         {
             "role": "system",
-            "content": "You are a helpful assistant, that given repository files structure and content of the most important files will help to generate a Dockerfile to build a valid docker image that can be run to run the app of repository. Use latest base image versions and best practises, implement all security measures and expose all necessary ports. Respond only with the content of the Dockerfile, ignore formatting markers.",
+            "content": "You are a helpful assistant, that given repository files structure (only some part of it) and content of the most important files will help to generate a Dockerfile to build a valid docker image that can be run to run the app of repository. Use latest base image versions and best practises, implement all security measures and expose all necessary ports. Respond only with the content of the Dockerfile, ignore formatting markers.",
         },
         {"role": "user", "content": prompt},
     ],
