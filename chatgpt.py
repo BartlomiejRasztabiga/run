@@ -42,15 +42,17 @@ def ask_assistant_v1(system_prompt, user_prompt):
     return content
 
 
-def ask_assistant_v2(prompt):
+def ask_assistant_v2(user_prompt):
     thread = client.beta.threads.create()
-    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=prompt)
+    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=user_prompt)
     run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=assistant_id)
     while run.status == "queued" or run.status == "in_progress":
         run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
         time.sleep(0.5)
-    messages = client.beta.threads.messages.list(thread_id=thread.id, order="asc")
-    return messages
+    messages = client.beta.threads.messages.list(thread_id=thread.id, order="desc")
+    last_message = messages.data[-1]
+    content = last_message.content[0].text.value
+    return content
 
 
 def prepare_working_directory(tmp_dir):
@@ -109,10 +111,13 @@ def tree_to_str(tree, trim_dir=None):
 def get_important_files(tree_str):
     logger.info("Finding important files...")
 
-    content = ask_assistant_v1(GET_IMPORTANT_FILES_ASSISTANT_PROMPT, tree_str)
+    content = ask_assistant_v2(tree_str)
 
     # get files from response and trim (strip)
     files = list(map(lambda x: x.strip(), content.split("\n")))
+
+    # remove empty strings
+    files = list(filter(None, files))
 
     # ignore .jar and Dockerfile files (unsupported)
     ignored_files = [".jar", "Dockerfile", "k8s.yaml"]
