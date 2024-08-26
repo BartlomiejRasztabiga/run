@@ -3,10 +3,14 @@ import time
 
 import docker
 import logging
+import shutil
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from git import Repo
+
+from prompts import GET_IMPORTANT_FILES_ASSISTANT_PROMPT, GET_DOCKERFILE_ASSISTANT_PROMPT, \
+    GET_KUBERNETES_CONFIG_ASSISTANT_PROMPT
 
 load_dotenv()
 
@@ -15,15 +19,45 @@ logger = logging.getLogger(__name__)
 client = OpenAI()
 model = "gpt-4o-mini"
 temperature = 0.2
+assistant_id = "asst_SJna0vRlll8fErtppVLrELIg"
 
 docker_client = docker.from_env()
+
+
+def ask_assistant_v1(system_prompt, user_prompt):
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
+    )
+
+    content = completion.choices[0].message.content
+
+    return content
+
+
+def ask_assistant_v2(prompt):
+    thread = client.beta.threads.create()
+    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=prompt)
+    run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=assistant_id)
+    while run.status == "queued" or run.status == "in_progress":
+        run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+        time.sleep(0.5)
+    messages = client.beta.threads.messages.list(thread_id=thread.id, order="asc")
+    return messages
 
 
 def prepare_working_directory(tmp_dir):
     logger.info("Preparing working directory...")
 
     # clear dir
-    os.system(f"rm -rf {tmp_dir}")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # create dir
     os.makedirs(tmp_dir, exist_ok=True)
@@ -75,25 +109,13 @@ def tree_to_str(tree, trim_dir=None):
 def get_important_files(tree_str):
     logger.info("Finding important files...")
 
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a helpful assistant, that given repository files structure (only some part of it) will help to identify the most important files to generate a Dockerfile to build a valid docker image that can be run to run the app of repository. Respond only with the file names, in the same format as provided, ignore formatting markers.",
-            },
-            {"role": "user", "content": tree_str},
-        ],
-        temperature=temperature,
-    )
-
-    content = completion.choices[0].message.content
+    content = ask_assistant_v1(GET_IMPORTANT_FILES_ASSISTANT_PROMPT, tree_str)
 
     # get files from response and trim (strip)
     files = list(map(lambda x: x.strip(), content.split("\n")))
 
     # ignore .jar and Dockerfile files (unsupported)
-    ignored_files = [".jar", "Dockerfile"]
+    ignored_files = [".jar", "Dockerfile", "k8s.yaml"]
     files = [file for file in files if not any(ignored_file in file for ignored_file in ignored_files)]
 
     return files
@@ -120,19 +142,7 @@ def get_dockerfile(tree_str, files_content):
     {files_content}
     """
 
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a helpful assistant, that given repository files structure (only some part of it) and content of the most important files will help to generate a Dockerfile to build a valid docker image that can be run to run the app of repository. Use latest base image versions and best practises, implement all security measures and expose all necessary ports. Respond only with the content of the Dockerfile, ignore formatting markers.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=temperature,
-    )
-
-    content = completion.choices[0].message.content
+    content = ask_assistant_v1(GET_DOCKERFILE_ASSISTANT_PROMPT, prompt)
 
     return content
 
@@ -144,12 +154,14 @@ def write_dockerfile(tmp_dir, content):
     with open(tmp_dir + "/Dockerfile", "w") as f:
         f.write(content)
 
+
 def get_exposed_ports(dockerfile):
     exposed_ports = []
     for line in dockerfile.split("\n"):
         if "EXPOSE" in line:
             exposed_ports = line.split(" ")[1:]
     return exposed_ports
+
 
 def build_docker_image(tmp_dir, repo_name):
     logger.info("Building Docker image...")
@@ -160,10 +172,31 @@ def build_docker_image(tmp_dir, repo_name):
 
     return image
 
-def run_docker_image(image, dockerfile):
-    logger.info("Running Docker image...")
 
-    exposed_ports = get_exposed_ports(dockerfile)
+def get_k8s_config(tmp_dir, tree_str, files_content, dockerfile):
+    # TODO
+    logger.info("Preparing Kubernetes config...")
+
+    # create files to apply
+    # this files will be used to create k8s deployment, service and ingress
+
+    prompt = f"""
+    {tree_str}
+    
+    {files_content}
+    
+    {dockerfile}
+    """
+
+    k8s_config = ask_assistant_v1(GET_KUBERNETES_CONFIG_ASSISTANT_PROMPT, prompt)
+
+    # write to file
+    with open(tmp_dir + "/k8s.yaml", "w") as f:
+        f.write(k8s_config)
+
+
+def run_docker_image(image, exposed_ports):
+    logger.info("Running Docker image...")
 
     # run docker image, expose ports according to Dockerfile
     ports = {}
@@ -177,6 +210,7 @@ def run_docker_image(image, dockerfile):
     container.reload()
 
     return container
+
 
 def do_magic(repo_url):
     # TODO rewrite to oop
@@ -199,16 +233,13 @@ def do_magic(repo_url):
 
     write_dockerfile(tmp_dir, dockerfile)
 
-
     image = build_docker_image(tmp_dir, repo_name)
 
-    container = run_docker_image(image, dockerfile)
+    exposed_ports = get_exposed_ports(dockerfile)
 
-    container_ports = container.attrs["NetworkSettings"]["Ports"]
+    container = run_docker_image(image, exposed_ports)
 
-    for port in container_ports:
-        host_port = container_ports[port][0]["HostPort"]
-        logger.info("Container running on port %s", host_port)
+    get_k8s_config(tmp_dir, tree_str, files_content, dockerfile)
 
     logger.info("DONE")
 
