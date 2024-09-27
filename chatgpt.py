@@ -265,8 +265,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     # repo_url = "https://github.com/BartlomiejRasztabiga/run-example.git"
-    # repo_url = "git@bitbucket.org:symmetricalai/employee-management.git"
-    repo_url = "git@github.com:BartlomiejRasztabiga/FO23Z.git"
+    repo_url = "https://github.com/BartlomiejRasztabiga/FO23Z.git"
     do_magic(repo_url)
 
 

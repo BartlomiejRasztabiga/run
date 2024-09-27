@@ -15,6 +15,7 @@ microk8s status --wait-ready
 
 # enable addons
 microk8s enable registry
+microk8s enable hostpath-storage
 microk8s enable ingress
 
 # install docker
@@ -25,7 +26,18 @@ sudo usermod -aG docker $USER
 newgrp docker
 
 # clone worker repo
-git clone git@github.com:BartlomiejRasztabiga/run.git
+git clone https://github.com/BartlomiejRasztabiga/run.git
 cd run
 echo "OPENAI_API_KEY=$OPENAI_API_KEY" > .env
 echo "REGISTRY_URL=localhost:32000" >> .env
+
+# install python
+sudo apt install python3 python3-pip python3-venv -y
+
+# setup worker
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# run worker
+python3 ./chatgpt.py
