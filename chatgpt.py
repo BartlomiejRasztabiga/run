@@ -119,7 +119,7 @@ def get_files_content(files, tmp_dir):
     # get files content
     files_content = {}
     for file in files:
-        with open(tmp_dir + file, "r") as f:
+        with open(tmp_dir + "/" + file, "r") as f:
             files_content[file] = f.read()
 
     return files_content

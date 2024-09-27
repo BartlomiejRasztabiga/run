@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 
 if [[ -z "${OPENAI_API_KEY}" ]]; then
   echo "OPENAI_API_KEY is not set"
@@ -21,9 +21,7 @@ microk8s enable ingress
 # install docker
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
-sudo groupadd docker
-sudo usermod -aG docker $USER
-newgrp docker
+
 
 # clone worker repo
 git clone https://github.com/BartlomiejRasztabiga/run.git
@@ -39,5 +37,6 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# run worker
-python3 ./chatgpt.py
+# rootless docker
+sudo usermod -aG docker $USER
+newgrp docker
