@@ -71,6 +71,12 @@ def clone_repo(repo_url, tmp_dir):
     # clone repo
     Repo.clone_from(repo_url, tmp_dir)
 
+    # TODO remove confusing files
+    confusing_files = ["Dockerfile", "k8s.yaml"]
+    for file in confusing_files:
+        if os.path.exists(tmp_dir + "/" + file):
+            os.remove(tmp_dir + "/" + file)
+
 
 def prepare_repo_tree_as_string(tmp_dir):
     logger.info("Preparing tree...")
@@ -168,17 +174,19 @@ def get_exposed_ports(dockerfile):
     return exposed_ports
 
 
-def build_docker_image(tmp_dir, repo_name):
+def build_docker_image(tmp_dir, image_tag):
     logger.info("Building Docker image...")
 
     # build docker image
-    image_tag = repo_name.lower()
-    image, logs = docker_client.images.build(path=tmp_dir, tag=image_tag)
+    image, logs = docker_client.images.build(path=tmp_dir, tag=image_tag, forcerm=True)
+
+    # push to registry
+    docker_client.images.push(image_tag)
 
     return image
 
 
-def get_k8s_config(tmp_dir, tree_str, files_content, dockerfile):
+def get_k8s_config(tmp_dir, tree_str, files_content, dockerfile, image_tag):
     # TODO
     logger.info("Preparing Kubernetes config...")
 
@@ -191,6 +199,8 @@ def get_k8s_config(tmp_dir, tree_str, files_content, dockerfile):
     {files_content}
     
     {dockerfile}
+    
+    Image tag: {image_tag}
     """
 
     k8s_config = ask_assistant_v1(GET_KUBERNETES_CONFIG_ASSISTANT_PROMPT, prompt)
@@ -223,6 +233,7 @@ def do_magic(repo_url):
     logger.info("Starting with repo_url: %s", repo_url)
 
     repo_name = repo_url.split("/")[-1].replace(".git", "")
+    registry = os.getenv("REGISTRY_URL")
 
     tmp_dir = f"./tmp/{repo_name}"
 
@@ -238,13 +249,14 @@ def do_magic(repo_url):
 
     write_dockerfile(tmp_dir, dockerfile)
 
-    image = build_docker_image(tmp_dir, repo_name)
+    image_tag = f"{registry}/{repo_name.lower()}:latest"
+    image = build_docker_image(tmp_dir, image_tag)
 
     exposed_ports = get_exposed_ports(dockerfile)
 
-    container = run_docker_image(image, exposed_ports)
+    # container = run_docker_image(image, exposed_ports)
 
-    get_k8s_config(tmp_dir, tree_str, files_content, dockerfile)
+    get_k8s_config(tmp_dir, tree_str, files_content, dockerfile, image_tag)
 
     logger.info("DONE")
 
