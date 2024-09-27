@@ -9,48 +9,29 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from git import Repo
 
-from prompts import GET_IMPORTANT_FILES_ASSISTANT_PROMPT, GET_DOCKERFILE_ASSISTANT_PROMPT, \
-    GET_KUBERNETES_CONFIG_ASSISTANT_PROMPT
-
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 client = OpenAI()
 model = "gpt-4o-mini"
-temperature = 0.2
 assistant_id = "asst_SJna0vRlll8fErtppVLrELIg"
 
 docker_client = docker.from_env()
 
 
-def ask_assistant_v1(system_prompt, user_prompt):
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=temperature,
-    )
+# TODO typ k8s servicu?
 
-    content = completion.choices[0].message.content
-
-    return content
-
-
-def ask_assistant_v2(user_prompt):
+def ask_assistant_v2(use_case, user_prompt):
     thread = client.beta.threads.create()
-    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=user_prompt)
+    prompt = f"Use case: {use_case}\n\n{user_prompt}"
+    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=prompt)
     run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=assistant_id)
     while run.status == "queued" or run.status == "in_progress":
         run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
         time.sleep(0.5)
     messages = client.beta.threads.messages.list(thread_id=thread.id, order="desc")
-    last_message = messages.data[-1]
+    last_message = messages.data[0]
     content = last_message.content[0].text.value
     return content
 
@@ -117,7 +98,7 @@ def tree_to_str(tree, trim_dir=None):
 def get_important_files(tree_str):
     logger.info("Finding important files...")
 
-    content = ask_assistant_v2(tree_str)
+    content = ask_assistant_v2("get_important_files", tree_str)
 
     # get files from response and trim (strip)
     files = list(map(lambda x: x.strip(), content.split("\n")))
@@ -153,7 +134,7 @@ def get_dockerfile(tree_str, files_content):
     {files_content}
     """
 
-    content = ask_assistant_v1(GET_DOCKERFILE_ASSISTANT_PROMPT, prompt)
+    content = ask_assistant_v2("get_dockerfile", prompt)
 
     return content
 
@@ -178,7 +159,7 @@ def build_docker_image(tmp_dir, image_tag):
     logger.info("Building Docker image...")
 
     # build docker image
-    image, logs = docker_client.images.build(path=tmp_dir, tag=image_tag, forcerm=True)
+    image, logs = docker_client.images.build(path=tmp_dir, tag=image_tag, forcerm=True, pull=False)
 
     # push to registry
     docker_client.images.push(image_tag)
@@ -203,7 +184,7 @@ def get_k8s_config(tmp_dir, tree_str, files_content, dockerfile, image_tag):
     Image tag: {image_tag}
     """
 
-    k8s_config = ask_assistant_v1(GET_KUBERNETES_CONFIG_ASSISTANT_PROMPT, prompt)
+    k8s_config = ask_assistant_v2("get_k8s_config", prompt)
 
     # write to file
     with open(tmp_dir + "/k8s.yaml", "w") as f:
