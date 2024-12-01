@@ -1,199 +1,240 @@
+import logging
 import os
-import uuid
 import shutil
+import time
+
 import docker
-from contextlib import asynccontextmanager
-import kubernetes
-
-from fastapi import FastAPI
+from dotenv import load_dotenv
 from git import Repo
-from pydantic import BaseModel
 
-BASE_PATH = "./temp"
+from models import get_model
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 docker_client = docker.from_env()
 
-kubernetes.config.load_kube_config()
-k8s_core_api_client = kubernetes.client.CoreV1Api()
-k8s_apps_api_client = kubernetes.client.AppsV1Api()
-k8s_networking_api_client = kubernetes.client.NetworkingV1Api()
+# TODO typ k8s servicu?
+# TODO fix prompt formatting
+
+model = get_model("gpt-4o-mini")
+print(model)
 
 
-class CreateDeploymentRequest(BaseModel):
-    repo_url: str
+def prepare_working_directory(tmp_dir):
+    logger.info("Preparing working directory...")
+
+    # clear dir
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # create dir
+    os.makedirs(tmp_dir, exist_ok=True)
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    await setup_worker()
-    yield
+def clone_repo(repo_url, tmp_dir):
+    logger.info("Cloning repository...")
+
+    # clone repo
+    Repo.clone_from(repo_url, tmp_dir)
+
+    # TODO remove confusing files
+    confusing_files = ["Dockerfile", "k8s.yaml"]
+    for file in confusing_files:
+        if os.path.exists(tmp_dir + "/" + file):
+            os.remove(tmp_dir + "/" + file)
 
 
-app = FastAPI(lifespan=lifespan)
+def prepare_repo_tree_as_string(tmp_dir):
+    logger.info("Preparing tree...")
+
+    # get tree ignoring .git
+    dir_tree = tree(tmp_dir, level=1, ignore=[".git"])
+
+    # tree to string, ignoring .git
+    tree_str = tree_to_str(dir_tree, trim_dir=tmp_dir)
+
+    return tree_str
 
 
-async def setup_worker():
-    # if os.path.exists(BASE_PATH):
-    #     shutil.rmtree(BASE_PATH)
-
-    os.makedirs(BASE_PATH, exist_ok=True)
-
-
-async def clone_repo(repo_url, repo_path):
-    try:
-        Repo.clone_from(repo_url, repo_path, depth=1)
-    except Exception as e:
-        print(e)
-
-
-async def check_dockerfile(repo_path):
-    dockerfile_path = f"{repo_path}/Dockerfile"
-    if not os.path.exists(dockerfile_path):
-        raise Exception("Dockerfile not found")
+def tree(some_dir, level, ignore):
+    some_dir = some_dir.rstrip(os.path.sep)
+    assert os.path.isdir(some_dir)
+    num_sep = some_dir.count(os.path.sep)
+    for root, dirs, files in os.walk(some_dir):
+        yield root, dirs, files
+        num_sep_this = root.count(os.path.sep)
+        if num_sep + level <= num_sep_this:
+            del dirs[:]
+        for i in ignore:
+            if i in dirs:
+                dirs.remove(i)
 
 
-async def build_image(repo_path, image_name):
-    image, build_logs = docker_client.images.build(
-        path=repo_path, tag=image_name, rm=True, pull=True
-    )
-
-    return image.tags[0]
-
-
-async def push_image(image_tag):
-    prefix = "localhost:32000"
-    new_image_tag = f"{prefix}/{image_tag}"
-    print(new_image_tag)
-    docker_client.images.get(image_tag).tag(new_image_tag)
-    docker_client.images.push(new_image_tag)
-    return new_image_tag
+def tree_to_str(tree, trim_dir=None):
+    tree_str = ""
+    for root, dirs, files in tree:
+        if trim_dir:
+            root = root.replace(trim_dir, "")
+        for file in files:
+            tree_str += f"{root}/{file}\n"
+    return tree_str
 
 
-async def create_k8s_deployment(namespace_name, image_tag, deployment_name):
-    namespace = kubernetes.client.V1Namespace(
-        api_version="v1",
-        kind="Namespace",
-        metadata=kubernetes.client.V1ObjectMeta(name=namespace_name),
-    )
-    k8s_core_api_client.create_namespace(namespace)
+def get_important_files(tree_str):
+    logger.info("Finding important files...")
 
-    print("created namespace")
+    content = model.ask_model("get_important_files", tree_str)
 
-    # TODO jaki port???
+    # get files from response and trim (strip)
+    files = list(map(lambda x: x.strip(), content.split("\n")))
 
-    container = kubernetes.client.V1Container(
-        name="container",
-        image=image_tag,
-        ports=[kubernetes.client.V1ContainerPort(container_port=8080)]
-    )
+    # remove empty strings
+    files = list(filter(None, files))
 
-    # Create and configure a spec section
-    template = kubernetes.client.V1PodTemplateSpec(
-        metadata=kubernetes.client.V1ObjectMeta(labels={"app": "container"}),
-        spec=kubernetes.client.V1PodSpec(containers=[container]),
-    )
+    # ignore .jar and Dockerfile files (unsupported)
+    ignored_files = [".jar", "Dockerfile", "k8s.yaml"]
+    files = [file for file in files if not any(ignored_file in file for ignored_file in ignored_files)]
 
-    # Create the specification of deployment
-    spec = kubernetes.client.V1DeploymentSpec(
-        replicas=1, template=template, selector={
-            "matchLabels":
-                {"app": "container"}})
-
-    # Instantiate the deployment object
-    deployment = kubernetes.client.V1Deployment(
-        api_version="apps/v1",
-        kind="Deployment",
-        metadata=kubernetes.client.V1ObjectMeta(name=deployment_name),
-        spec=spec,
-    )
-
-    k8s_apps_api_client.create_namespaced_deployment(namespace_name, deployment)
-
-    print("created deployment")
-
-    # create service
-    service = kubernetes.client.V1Service(
-        api_version="v1",
-        kind="Service",
-        metadata=kubernetes.client.V1ObjectMeta(name=deployment_name),
-        spec=kubernetes.client.V1ServiceSpec(
-            selector={"app": "container"},
-            ports=[kubernetes.client.V1ServicePort(
-                port=8080, target_port=8080)]
-        )
-    )
-    k8s_core_api_client.create_namespaced_service(namespace_name, service)
-
-    print("created service")
-
-    # create ingress
-    ingress = kubernetes.client.V1Ingress(
-        api_version="networking.k8s.io/v1",
-        kind="Ingress",
-        metadata=kubernetes.client.V1ObjectMeta(name=deployment_name),
-        spec=kubernetes.client.V1IngressSpec(
-            rules=[kubernetes.client.V1IngressRule(
-                host=f"{deployment_name}.rasztabiga.me",
-                http=kubernetes.client.V1HTTPIngressRuleValue(
-                    paths=[kubernetes.client.V1HTTPIngressPath(
-                        path="/",
-                        path_type="Prefix",
-                        backend=kubernetes.client.V1IngressBackend(
-                            service=kubernetes.client.V1IngressServiceBackend(
-                                port=kubernetes.client.V1ServiceBackendPort(
-                                    number=8080
-                                ),
-                                name=deployment_name
-                            )
-                        )
-                    )]
-                )
-            )]
-        )
-    )
-    k8s_networking_api_client.create_namespaced_ingress(namespace_name, ingress)
-
-    print("created ingress")
-
-    # get url
-    return f"https://{deployment_name}.rasztabiga.me"
+    return files
 
 
-async def deploy(repo_url):
-    repo_name = repo_url.split("/")[-1].split(".")[0]
-    user_id = uuid.uuid4()
-    deployment_id = f"{repo_name}-{user_id}"
-    repo_path = f"{BASE_PATH}/{deployment_id}"
+def get_files_content(files, tmp_dir):
+    logger.info("Preparing files content...")
 
-    await clone_repo(repo_url, repo_path)
-    await check_dockerfile(repo_path)
-    image_tag = await build_image(repo_path, deployment_id)
-    print(image_tag)
+    # get files content
+    files_content = {}
+    for file in files:
+        with open(tmp_dir + "/" + file, "r") as f:
+            files_content[file] = f.read()
 
-    new_image_tag = await push_image(image_tag)
-    print("pushed")
-
-    url = await create_k8s_deployment(deployment_id, new_image_tag, deployment_id)
-
-    # push docker image to cluster?
-    # create k8s deployment + service + ingress config giles
-    # apply k8s config files
-    # return url
-
-    return url
+    return files_content
 
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+def get_dockerfile(tree_str, files_content):
+    logger.info("Generating Dockerfile...")
+
+    prompt = f"""
+    {tree_str}
+    
+    {files_content}
+    """
+
+    content = model.ask_model("get_dockerfile", prompt)
+
+    return content
 
 
-@app.get("/hello/{name}")
-async def say_hello(name: str):
-    return {"message": f"Hello {name}"}
+def write_dockerfile(tmp_dir, content):
+    logger.info("Writing Dockerfile...")
+
+    # write Dockerfile to tmp
+    with open(tmp_dir + "/Dockerfile", "w") as f:
+        f.write(content)
 
 
-@app.post("/deployments")
-async def create_deployment(request: CreateDeploymentRequest):
-    url = await deploy(request.repo_url)
-    return {"url": url}
+def get_exposed_ports(dockerfile):
+    exposed_ports = []
+    for line in dockerfile.split("\n"):
+        if "EXPOSE" in line:
+            exposed_ports = line.split(" ")[1:]
+    return exposed_ports
+
+
+def build_docker_image(tmp_dir, image_tag):
+    logger.info("Building Docker image...")
+
+    # build docker image
+    image, logs = docker_client.images.build(path=tmp_dir, tag=image_tag, forcerm=True, pull=False)
+
+    # push to registry
+    docker_client.images.push(image_tag)
+
+    return image
+
+
+def get_k8s_config(tmp_dir, tree_str, files_content, dockerfile, image_tag):
+    # TODO
+    logger.info("Preparing Kubernetes config...")
+
+    # create files to apply
+    # this files will be used to create k8s deployment, service and ingress
+
+    prompt = f"""
+    {tree_str}
+    
+    {files_content}
+    
+    {dockerfile}
+    
+    Image tag: {image_tag}
+    """
+
+    k8s_config = model.ask_model("get_k8s_config", prompt)
+
+    # write to file
+    with open(tmp_dir + "/k8s.yaml", "w") as f:
+        f.write(k8s_config)
+
+
+def run_docker_image(image, exposed_ports):
+    logger.info("Running Docker image...")
+
+    # run docker image, expose ports according to Dockerfile
+    ports = {}
+    for port in exposed_ports:
+        ports[port + '/tcp'] = None
+
+    container = docker_client.containers.run(image, detach=True, ports=ports)
+
+    time.sleep(5)  # wait for container to start
+
+    container.reload()
+
+    return container
+
+
+def do_magic(repo_url):
+    # TODO rewrite to oop
+
+    logger.info("Starting with repo_url: %s", repo_url)
+
+    repo_name = repo_url.split("/")[-1].replace(".git", "")
+    registry = os.getenv("REGISTRY_URL")
+
+    tmp_dir = f"./tmp/{repo_name}"
+
+    prepare_working_directory(tmp_dir)
+    clone_repo(repo_url, tmp_dir)
+
+    tree_str = prepare_repo_tree_as_string(tmp_dir)
+
+    important_files = get_important_files(tree_str)
+    files_content = get_files_content(important_files, tmp_dir)
+
+    dockerfile = get_dockerfile(tree_str, files_content)
+
+    write_dockerfile(tmp_dir, dockerfile)
+
+    image_tag = f"{registry}/{repo_name.lower()}:latest"
+    image = build_docker_image(tmp_dir, image_tag)
+
+    exposed_ports = get_exposed_ports(dockerfile)
+
+    # container = run_docker_image(image, exposed_ports)
+
+    get_k8s_config(tmp_dir, tree_str, files_content, dockerfile, image_tag)
+
+    logger.info("DONE")
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+
+    # repo_url = "https://github.com/BartlomiejRasztabiga/run-example.git"
+    repo_url = "https://github.com/BartlomiejRasztabiga/FO23Z.git"
+    do_magic(repo_url)
+
+
+if __name__ == "__main__":
+    main()
