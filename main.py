@@ -18,7 +18,10 @@ docker_client = docker.from_env()
 # TODO typ k8s servicu?
 # TODO fix prompt formatting
 
-model = get_model("gpt-4o-mini")
+# model = get_model("openai/gpt-4o-mini")
+# model = get_model("google/gemini-2.0-flash-exp:free")
+# model = get_model("google/gemini-flash-1.5")
+model = get_model("anthropic/claude-3.5-haiku")
 print(model)
 
 

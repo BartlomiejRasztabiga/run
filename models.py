@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 
 from dotenv import load_dotenv
@@ -7,16 +8,18 @@ from prompts import SYSTEM_PROMPT
 
 load_dotenv()
 
-client = OpenAI()
+
 
 
 def get_model(model_name):
-    if model_name == "gpt-4o-mini":
-        return OpenAIModel(model_name)
-    if model_name == "gpt-4o":
-        return OpenAIModel(model_name)
-    else:
-        return None
+    # TODO
+    return OpenRouterModel(model_name)
+    # if model_name == "gpt-4o-mini":
+    #     return OpenAIModel(model_name)
+    # if model_name == "gpt-4o":
+    #     return OpenAIModel(model_name)
+    # else:
+    #     return None
 
 
 class Model(ABC):
@@ -32,9 +35,25 @@ class Model(ABC):
 class OpenAIModel(Model):
     def __init__(self, model):
         self.model = model
+        self.client = OpenAI()
 
     def ask_model_internal(self, prompt):
-        completion = client.chat.completions.create(model=self.model, messages=[
+        completion = self.client.chat.completions.create(model=self.model, messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ])
+        return completion.choices[0].message.content
+
+class OpenRouterModel(Model):
+    def __init__(self, model):
+        self.model = model
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY")
+        )
+
+    def ask_model_internal(self, prompt):
+        completion = self.client.chat.completions.create(model=self.model, messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt}
         ])
